@@ -151,3 +151,4 @@ test-suite escrow-test
     , tasty-quickcheck
     , text
     , flat
+    , prettyprinter

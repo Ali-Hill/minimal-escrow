@@ -20,11 +20,11 @@ module Spec.Escrow (
   prop_validityChecks,
   checkPropEscrowWithCoverage,
   EscrowModel,
-  normalCertification,
+{-  normalCertification,
   normalCertification',
   quickCertificationWithCheckOptions,
   outputCoverageOfQuickCertification,
-  runS
+  runS -}
 ) where
 
 import Control.Lens (At (at), makeLenses, to, (%=), (.=), (^.))
@@ -131,6 +131,12 @@ import Plutus.Contract.Test.Certification
 import Plutus.Contract.Test.Certification.Run
 import Test.QuickCheck.DynamicLogic qualified as QCD
 import Plutus.Contract.Test.Certification.Run (certifyWithOptions)
+import Data.IORef (IORef)
+
+import PlutusTx.Coverage
+import qualified Cardano.Node.Emulator as E
+import Test.Tasty.HUnit
+import Prettyprinter qualified as Pretty
 
 type Wallet = Integer
 
@@ -151,6 +157,14 @@ options =
   E.defaultOptions
     { E.params = Params.increaseTransactionLimits def
     , E.coverageIndex = Impl.covIdx
+    }
+
+optionsCoverage :: IORef CoverageData -> E.Options EscrowModel
+optionsCoverage ref =
+  E.defaultOptions
+    { E.params = Params.increaseTransactionLimits def
+    , E.coverageIndex = Impl.covIdx
+    , E.coverageRef = Just ref
     }
 
 instance ContractModel EscrowModel where
@@ -299,6 +313,9 @@ walletPrivateKey = (E.knownPaymentPrivateKeys !!) . pred . fromIntegral
 testWallets :: [Wallet]
 testWallets = [w1, w2, w3, w4, w5] -- removed five to increase collisions (, w6, w7, w8, w9, w10])
 
+prop_EscrowCoverage :: IORef CoverageData -> Actions EscrowModel -> Property
+prop_EscrowCoverage ref = E.propRunActionsWithOptions (optionsCoverage ref)
+
 prop_Escrow :: Actions EscrowModel -> Property
 prop_Escrow = E.propRunActionsWithOptions options
 
@@ -378,8 +395,8 @@ validityChecks = do
 prop_validityChecks :: Actions EscrowModel -> Property
 prop_validityChecks = E.checkThreatModelWithOptions options validityChecks
 
-tests :: TestTree
-tests =
+tests :: IORef CoverageData -> TestTree
+tests ref =
   testGroup
     "escrow"
     [ checkPredicateOptions
@@ -436,14 +453,22 @@ tests =
         $ do
           act $ Pay 1 20
           E.awaitSlot 100
-          act $ Refund 1
-    {-, testProperty "QuickCheck ContractModel" prop_Escrow
+          act $ Refund 1 ,
+    -- testProperty "coverage" (QC.isSuccess (liftIO (snd <$> checkPropEscrowWithCoverage'))),
+    testCase "coverage" printCoverage,
+    testProperty "QuickCheck ContractModel" $  QC.withMaxSuccess 20 (prop_EscrowCoverage ref)
+    {-
     , testProperty "QuickCheck NoLockedFunds" prop_NoLockedFunds
     , testProperty "QuickCheck validityChecks" $ QC.withMaxSuccess 30 prop_validityChecks
     , testProperty "QuickCheck finishEscrow" prop_FinishEscrow
     , testProperty "QuickCheck double satisfaction fails" $
         QC.expectFailure (QC.noShrinking prop_Escrow_DoubleSatisfaction) -}
     ]
+
+printCoverage :: IO ()
+printCoverage = do
+  cr <- checkPropEscrowWithCoverage'
+  print $ Pretty.pretty cr
 
 escrowParams :: POSIXTime -> EscrowParams d
 escrowParams startTime =
@@ -455,11 +480,16 @@ escrowParams startTime =
         ]
     }
 
+
+checkPropEscrowWithCoverage' :: IO PlutusTx.Coverage.CoverageReport
+checkPropEscrowWithCoverage' = E.quickCheckWithCoverage QC.stdArgs options $ QC.withMaxSuccess 20 . E.propRunActionsWithOptions
+
 checkPropEscrowWithCoverage :: IO ()
 checkPropEscrowWithCoverage = do
   cr <-
-    E.quickCheckWithCoverage QC.stdArgs options $ QC.withMaxSuccess 20 . E.propRunActionsWithOptions
+    E.quickCheckWithCoverage QC.stdArgs options $ QC.withMaxSuccess 100 . E.propRunActionsWithOptions
   writeCoverageReport "Escrow" cr
+
 
 unitTest1 :: DL EscrowModel ()
 unitTest1 = do
@@ -477,6 +507,7 @@ unitTest2 = do
               waitUntilDL 100
               action $ Refund w1
 
+{-
 -- | Certification.
 certification :: Certification EscrowModel
 certification = defaultCertification {
@@ -517,3 +548,4 @@ certCustom = CertificationOptions { certOptOutput = True
                                     , certEventChannel = Nothing }
 
 runS = runStandardProperty' certCustom options
+-}

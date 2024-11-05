@@ -4,12 +4,16 @@ module Main(main) where
 import Spec.Escrow qualified
 
 import Test.Tasty
+import PlutusTx.Coverage
+import Data.IORef (IORef, newIORef)
 
 main :: IO ()
-main = defaultMain tests
+main = do
+  ref <- newIORef mempty
+  defaultMain (tests ref)
 
-tests :: TestTree
-tests =
+tests :: IORef CoverageData -> TestTree
+tests ref =
   testGroup "use cases" [
-    Spec.Escrow.tests
+    Spec.Escrow.tests ref
     ]
