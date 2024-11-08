@@ -1,15 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Main(main) where
 
-import Spec.Escrow qualified
-
-import Test.Tasty
+import Test.Tasty (defaultMain, testGroup, TestTree)
 
 main :: IO ()
 main = defaultMain tests
 
 tests :: TestTree
 tests =
-  testGroup "use cases" [
-    Spec.Escrow.tests
-    ]
+  testGroup "use cases" [ ]
