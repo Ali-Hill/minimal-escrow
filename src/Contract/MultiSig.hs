@@ -91,15 +91,16 @@ import Plutus.Script.Utils.V2.Contexts (
 import Plutus.Script.Utils.V2.Typed.Scripts qualified as V2
 import Plutus.Script.Utils.Value (Value, geq, lt)
 import PlutusLedgerApi.V1.Interval qualified as Interval
-import PlutusLedgerApi.V2 (Datum (Datum), Credential(..))
+import PlutusLedgerApi.V2 (Datum (Datum), Credential(..), OutputDatum (..))
 import PlutusLedgerApi.V2.Contexts (valuePaidTo)
 import PlutusLedgerApi.V2.Tx
     ( OutputDatum, TxOut(TxOut, txOutValue, txOutDatum, txOutAddress) )
 import PlutusLedgerApi.V2.Contexts
-
+import qualified Plutus.Script.Utils.Value as Ada
+import qualified PlutusTx.Builtins as PlutusTx
+import qualified Ledger as Ada
+import PlutusTx.Prelude (Eq ((==)))
 -- (OutputDatum (OutputDatum))
-
-
 
 
 data MultiSigParams = MultiSigParams
@@ -136,27 +137,44 @@ PlutusTx.makeLift ''Input
 
 
 
-{-# INLINABLE valueLockedBy #-}
+{-
 -- | Get the total value locked by the given validator in this transaction.
 valueLockedBy :: TxInfo -> ValidatorHash -> Value
 valueLockedBy ptx h =
     let outputs = map snd (scriptOutputsAt h ptx)
     in mconcat outputs
+-}
 
-newValue :: TxInfo -> ValidatorHash -> Value
-newValue txinfo vh = valueLockedBy txinfo vh
+
+{-# INLINABLE scriptOutputsAt' #-}
+-- | Get the list of 'TxOut' outputs of the pending transaction at
+--   a given script address.
+scriptOutputsAt' :: Ledger.ScriptHash -> TxInfo -> [(OutputDatum, Value)]
+scriptOutputsAt' h p =
+    let flt TxOut{txOutDatum=d, txOutAddress=Address (ScriptCredential s) _, txOutValue} | s PlutusTx.== h = Just (d, txOutValue)
+        flt _ = Nothing
+    in PlutusTx.mapMaybe flt (txInfoOutputs p)
+
+
+{-# INLINABLE valueLockedBy #-}
+-- | Get the total value locked by the given validator in this transaction.
+valueLockedBy :: TxInfo -> Ledger.ScriptHash  -> Value
+valueLockedBy ptx h =
+    let outputs = PlutusTx.map snd (scriptOutputsAt' h ptx)
+    in mconcat outputs
 
 {-# INLINABLE scriptInputsAt #-}
 -- | Get the list of 'TxOut' outputs of the pending transaction at
 --   a given script address.
 scriptInputsAt :: Ledger.ScriptHash -> TxInfo -> [(OutputDatum, Value)]
 scriptInputsAt h p =
-    let flt TxOut{txOutDatum=d, txOutAddress=Address (ScriptCredential s) _, txOutValue} | s == h = Just (d, txOutValue)
+    let flt TxOut{txOutDatum=d, txOutAddress=Address (ScriptCredential s) _, txOutValue} | s PlutusTx.== h = Just (d, txOutValue)
         flt _ = Nothing
-    in PlutusTx.mapMaybe flt (map txInInfoResolved $ txInfoInputs p)
+    in PlutusTx.mapMaybe flt (PlutusTx.map txInInfoResolved $ txInfoInputs p)
 
+{-# INLINABLE scriptInputValue #-}
 scriptInputValue :: TxInfo -> Ledger.ScriptHash -> Value
-scriptInputValue ptx h = mconcat (map snd (scriptInputsAt h ptx))
+scriptInputValue ptx h = mconcat (PlutusTx.map snd (scriptInputsAt h ptx))
 
 {-# INLINABLE ownHashes #-}
 -- | Get the validator and datum hashes of the output that is curently being validated
@@ -171,18 +189,27 @@ ownHash p = fst (ownHashes p)
 
 
 
--- | getContinuingOutputs :: ScriptContext -> [TxOut]
--- valueLockedBy :: TxInfo -> ValidatorHash -> Value
-
-
-
-
-
 -- | Haskell version of the above agda code
 {-# INLINABLE multiSigValidator #-}
 multiSigValidator :: MultiSigParams -> Label -> Input -> ScriptContext -> Bool
 multiSigValidator param lbl inp sc = case (lbl, inp) of
-  (Holding, Propose v pkh slot) -> True
+  (Holding, Propose v pkh slot) -> let oldValue = scriptInputValue (scriptContextTxInfo sc) (ownHash sc)
+                                       newValue = valueLockedBy (scriptContextTxInfo sc) (ownHash sc)
+                                       outDatum = snd (ownHashes sc)
+                                   in oldValue PlutusTx.== newValue
+                                      PlutusTx.&& oldValue `geq` v
+                                      -- Add v >= 0 -- I guess this should be ada value
+                                      PlutusTx.&& case outDatum of
+                                      OutputDatum (Datum newDatum) -> case PlutusTx.fromBuiltinData newDatum of
+                                          Just Holding -> False
+                                          Just (Collecting _ _ _ _) -> False
+                                          Nothing ->
+                                            PlutusTx.traceError "Failed to decode output datum"
+                                      OutputDatumHash _ ->
+                                         PlutusTx.traceError "Expected OutputDatum, got OutputDatumHash"
+                                      NoOutputDatum ->
+                                          PlutusTx.traceError "Expected OutputDatum, got NoOutputDatum"
+
    {- Ledger.oldValue sc PlutusTx.== Ledger.newValue sc
       && Ledger.oldValue sc >= Just v
       && v >= 0
