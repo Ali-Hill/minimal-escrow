@@ -100,6 +100,7 @@ import qualified Plutus.Script.Utils.Value as Ada
 import qualified PlutusTx.Builtins as PlutusTx
 import qualified Ledger as Ada
 import PlutusTx.Prelude (Eq ((==)))
+import qualified Data.Aeson.Encoding as Map
 -- (OutputDatum (OutputDatum))
 
 data MultiSigParams = MultiSigParams
@@ -263,3 +264,130 @@ typedValidator = V2.mkTypedValidatorParam @MultiSig
     $$(PlutusTx.compile [|| wrap ||])
     where
         wrap = Scripts.mkUntypedValidator
+
+mkMultiSigAddress :: MultiSigParams -> Ledger.CardanoAddress
+mkMultiSigAddress = validatorCardanoAddress testnet . typedValidator
+
+toTxOutValue :: Value -> C.TxOutValue C.ConwayEra
+toTxOutValue = either (error . show) C.toCardanoTxOutValue . C.toCardanoValue
+
+toHashableScriptData :: (PlutusTx.ToData a) => a -> C.HashableScriptData
+toHashableScriptData = C.unsafeHashableScriptData . C.fromPlutusData . PlutusTx.toData
+
+toTxOutInlineDatum :: (PlutusTx.ToData a) => a -> C.TxOutDatum C.CtxTx C.ConwayEra
+toTxOutInlineDatum = C.TxOutDatumInline C.BabbageEraOnwardsConway . toHashableScriptData
+
+toValidityRange
+  :: SlotConfig
+  -> Interval.Interval POSIXTime
+  -> (C.TxValidityLowerBound C.ConwayEra, C.TxValidityUpperBound C.ConwayEra)
+toValidityRange slotConfig =
+  either (error . show) id . C.toCardanoValidityRange . posixTimeRangeToContainedSlotRange slotConfig
+
+
+
+mkProposalTxOut :: Label -> TxOut -> C.TxOut C.CtxTx C.ConwayEra
+mkProposalTxOut datum txout =
+  case C.toCardanoAddressInEra testnet (txOutAddress txout) of
+    Left _ -> error "Couldn't decode address"
+    Right addr -> C.TxOut
+                    addr
+                    (toTxOutValue (txOutValue txout))
+                    (toTxOutInlineDatum datum)
+                    C.ReferenceScriptNone
+
+-- Simple propose offchain
+-- we could check that we are mapping over a single contract here to make this better
+-- no error handling for the moment
+mkProposeTx
+  :: (E.MonadEmulator m)
+  => MultiSigParams
+  -- ^ Multisig Params
+  -> Ledger.CardanoAddress
+  -- ^ Wallet Address
+  -> Value
+  -- ^ How much money to pay in
+  -> POSIXTime
+  -- ^ Deadline for the money to be paid
+  -> m (C.CardanoBuildTx, Ledger.UtxoIndex)
+mkProposeTx multisig wallet value deadline = do
+  let multisigAddr = mkMultiSigAddress multisig
+  unspentOutputs <- E.utxosAt multisigAddr
+  slotConfig <- asks pSlotConfig
+  -- current <- fst <$> E.currentTimeRange
+  let
+    pkh = Ledger.PaymentPubKeyHash $ fromJust $ Ledger.cardanoPubKeyHash wallet
+    uPkh = unPaymentPubKeyHash pkh
+    validityRange = toValidityRange slotConfig $ Interval.to $ deadline - 1000
+    datum = Collecting value uPkh deadline []
+    witnessHeader =
+      C.toCardanoTxInScriptWitnessHeader
+        (Ledger.getValidator <$> Scripts.vValidatorScript (typedValidator multisig))
+    redeemer = toHashableScriptData $ Propose value uPkh deadline
+    witness =
+        C.BuildTxWith $
+          C.ScriptWitness C.ScriptWitnessForSpending $
+            witnessHeader C.InlineScriptDatum redeemer C.zeroExecutionUnits
+    txIns = (,witness) <$> Map.keys (C.unUTxO unspentOutputs)
+    txOuts' = map C.fromCardanoTxOutToPV2TxInfoTxOut' $ Map.elems (C.unUTxO unspentOutputs)
+    txOuts = map (mkProposalTxOut datum) txOuts'
+    utx =
+      E.emptyTxBodyContent
+      { C.txIns = txIns
+        , C.txOuts = txOuts
+        , C.txValidityLowerBound = fst validityRange
+        , C.txValidityUpperBound = snd validityRange
+      }
+    utxoIndex = mempty
+    in pure (C.CardanoBuildTx utx, utxoIndex)
+
+propose
+  :: (E.MonadEmulator m)
+  => MultiSigParams
+  -> Ledger.CardanoAddress
+  -> Ledger.PaymentPrivateKey
+  -> Value
+  -> POSIXTime
+  -> m ()
+propose multisig wallet privateKey value deadline = do
+  E.logInfo @String $ "Proposing" <> show value <> "to: " <> show wallet <> "by: " <> show deadline
+  (utx, utxoIndex) <- mkProposeTx multisig wallet value deadline
+  void $ E.submitTxConfirmed utxoIndex wallet [toWitness privateKey] utx
+
+
+
+
+
+
+
+{-
+  (Holding, Propose v pkh deadline) ->
+    let oldValue = scriptInputValue (scriptContextTxInfo sc) (ownHash sc)
+        newValue = valueLockedBy (scriptContextTxInfo sc) (ownHash sc)
+        outDatum = snd (ownHashes sc)
+    in oldValue PlutusTx.== newValue
+      PlutusTx.&& oldValue `geq` v
+      PlutusTx.&& v `geq` minimumValue param -- instead of v >= 0
+      PlutusTx.&& case outDatum of
+
+      OutputDatum (Datum newDatum) -> case PlutusTx.fromBuiltinData newDatum of
+          Just Holding -> False
+          Just (Collecting v' pkh' deadline' sigs') ->
+            v PlutusTx.== v'
+            PlutusTx.&& pkh PlutusTx.== pkh'
+            PlutusTx.&& deadline PlutusTx.== deadline'
+            PlutusTx.&& sigs' PlutusTx.== []
+
+data Label =
+        Holding
+        | Collecting Value Ada.PubKeyHash POSIXTime [Ada.PubKeyHash]
+
+PlutusTx.unstableMakeIsData ''Label
+PlutusTx.makeLift ''Label
+
+data Input =
+        Propose Value Ada.PubKeyHash POSIXTime
+        | Add Ada.PubKeyHash
+        | Pay
+        | Cancel
+-}
