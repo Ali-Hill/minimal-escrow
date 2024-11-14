@@ -111,6 +111,7 @@ test-suite escrow-test
   ghc-options:      -Wno-unused-packages
   other-modules:
     Spec.Escrow
+    Spec.MultiSig
 
   --------------------
   -- Local components
