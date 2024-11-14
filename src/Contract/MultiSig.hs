@@ -284,10 +284,8 @@ toValidityRange
 toValidityRange slotConfig =
   either (error . show) id . C.toCardanoValidityRange . posixTimeRangeToContainedSlotRange slotConfig
 
-
-
-mkProposalTxOut :: Label -> TxOut -> C.TxOut C.CtxTx C.ConwayEra
-mkProposalTxOut datum txout =
+mkDatumUpdateTxOut :: Label -> TxOut -> C.TxOut C.CtxTx C.ConwayEra
+mkDatumUpdateTxOut datum txout =
   case C.toCardanoAddressInEra testnet (txOutAddress txout) of
     Left _ -> error "Couldn't decode address"
     Right addr -> C.TxOut
@@ -304,7 +302,7 @@ mkProposeTx
   => MultiSigParams
   -- ^ Multisig Params
   -> Ledger.CardanoAddress
-  -- ^ Wallet Address
+  -- ^ Target Wallet Address
   -> Value
   -- ^ How much money to pay in
   -> POSIXTime
@@ -330,7 +328,7 @@ mkProposeTx multisig wallet value deadline = do
             witnessHeader C.InlineScriptDatum redeemer C.zeroExecutionUnits
     txIns = (,witness) <$> Map.keys (C.unUTxO unspentOutputs)
     txOuts' = map C.fromCardanoTxOutToPV2TxInfoTxOut' $ Map.elems (C.unUTxO unspentOutputs)
-    txOuts = map (mkProposalTxOut datum) txOuts'
+    txOuts = map (mkDatumUpdateTxOut datum) txOuts'
     utx =
       E.emptyTxBodyContent
       { C.txIns = txIns
@@ -345,49 +343,240 @@ propose
   :: (E.MonadEmulator m)
   => MultiSigParams
   -> Ledger.CardanoAddress
+  -> Ledger.CardanoAddress
   -> Ledger.PaymentPrivateKey
   -> Value
   -> POSIXTime
   -> m ()
-propose multisig wallet privateKey value deadline = do
-  E.logInfo @String $ "Proposing" <> show value <> "to: " <> show wallet <> "by: " <> show deadline
-  (utx, utxoIndex) <- mkProposeTx multisig wallet value deadline
+propose multisig wallet target privateKey value deadline = do
+  E.logInfo @String $ "Proposing" <> show value <> "to: " <> show target <> "by: " <> show deadline
+  (utx, utxoIndex) <- mkProposeTx multisig target value deadline
+  void $ E.submitTxConfirmed utxoIndex wallet [toWitness privateKey] utx
+
+mkAddSigDatum :: Ada.PubKeyHash -> TxOut -> Label
+mkAddSigDatum sig txout =
+  case txOutDatum txout of
+    OutputDatum (Datum newDatum) ->
+      case PlutusTx.fromBuiltinData newDatum of
+          Just Holding -> error "Can't add signature to holding state"
+          Just (Collecting v pkh deadline sigs) ->
+            Collecting v pkh deadline (sig : sigs)
+          Nothing ->
+            error "Failed to decode output datum"
+    OutputDatumHash _ ->
+        error "Expected OutputDatum, got OutputDatumHash"
+    NoOutputDatum ->
+        error "Expected OutputDatum, got NoOutputDatum"
+
+-- Add sig to contract
+-- TODO: I think I need to add signature additionally here
+-- TODO: We should get the deadline from the datum
+mkAddSigTx
+  :: (E.MonadEmulator m)
+  => MultiSigParams
+  -- ^ Multisig Params
+  -> Ledger.CardanoAddress
+  -- ^ Wallet Address
+  -> POSIXTime
+  -> m (C.CardanoBuildTx, Ledger.UtxoIndex)
+mkAddSigTx multisig wallet deadline = do
+  let multisigAddr = mkMultiSigAddress multisig
+  unspentOutputs <- E.utxosAt multisigAddr
+  slotConfig <- asks pSlotConfig
+  -- current <- fst <$> E.currentTimeRange
+  let
+    pkh = Ledger.PaymentPubKeyHash $ fromJust $ Ledger.cardanoPubKeyHash wallet
+    uPkh = unPaymentPubKeyHash pkh
+    validityRange = toValidityRange slotConfig $ Interval.to $ deadline - 1000
+    witnessHeader =
+      C.toCardanoTxInScriptWitnessHeader
+        (Ledger.getValidator <$> Scripts.vValidatorScript (typedValidator multisig))
+    redeemer = toHashableScriptData $ Add uPkh
+    witness =
+        C.BuildTxWith $
+          C.ScriptWitness C.ScriptWitnessForSpending $
+            witnessHeader C.InlineScriptDatum redeemer C.zeroExecutionUnits
+    txIns = (,witness) <$> Map.keys (C.unUTxO unspentOutputs)
+    txOuts' = map C.fromCardanoTxOutToPV2TxInfoTxOut' $ Map.elems (C.unUTxO unspentOutputs)
+    datum = mkAddSigDatum uPkh (head txOuts')
+    txOuts = map (mkDatumUpdateTxOut datum) txOuts'
+    utx =
+      E.emptyTxBodyContent
+      { C.txIns = txIns
+        , C.txOuts = txOuts
+        , C.txValidityLowerBound = fst validityRange
+        , C.txValidityUpperBound = snd validityRange
+      }
+    utxoIndex = mempty
+    in pure (C.CardanoBuildTx utx, utxoIndex)
+
+addSig
+  :: (E.MonadEmulator m)
+  => MultiSigParams
+  -> Ledger.CardanoAddress
+  -> Ledger.PaymentPrivateKey
+  -> POSIXTime
+  -> m ()
+addSig multisig wallet privateKey deadline = do
+  E.logInfo @String $ "Adding signature to contract of wallet: " <> show wallet
+  (utx, utxoIndex) <- mkAddSigTx multisig wallet deadline
   void $ E.submitTxConfirmed utxoIndex wallet [toWitness privateKey] utx
 
 
 
+mkPayTxOut :: TxOut -> C.TxOut C.CtxTx C.ConwayEra
+mkPayTxOut txout =
+  case txOutDatum txout of
+    OutputDatum (Datum newDatum) ->
+      case PlutusTx.fromBuiltinData newDatum of
+          Just Holding -> error "Can't pay in holding state"
+          Just (Collecting vl pkh _ _) ->
+            C.TxOut
+              ( C.makeShelleyAddressInEra
+                  C.shelleyBasedEra
+                  testnet
+                  (either (error . show) C.PaymentCredentialByKey $ C.toCardanoPaymentKeyHash (Ledger.PaymentPubKeyHash pkh))
+                  C.NoStakeAddress
+              )
+              (toTxOutValue vl)
+              (toTxOutInlineDatum Holding)
+              C.ReferenceScriptNone
+          Nothing ->
+            error "Failed to decode output datum"
+    OutputDatumHash _ ->
+        error "Expected OutputDatum, got OutputDatumHash"
+    NoOutputDatum ->
+        error "Expected OutputDatum, got NoOutputDatum"
 
 
+-- TODO: We should get the deadline from the datum
+mkPayTx
+  :: (E.MonadEmulator m)
+  => MultiSigParams
+  -- ^ Multisig Params
+  -> POSIXTime
+  -> m (C.CardanoBuildTx, Ledger.UtxoIndex)
+mkPayTx multisig deadline = do
+  let multisigAddr = mkMultiSigAddress multisig
+  unspentOutputs <- E.utxosAt multisigAddr
+  slotConfig <- asks pSlotConfig
+  -- current <- fst <$> E.currentTimeRange
+  let
+    validityRange = toValidityRange slotConfig $ Interval.to $ deadline - 1000
+    witnessHeader =
+      C.toCardanoTxInScriptWitnessHeader
+        (Ledger.getValidator <$> Scripts.vValidatorScript (typedValidator multisig))
+    redeemer = toHashableScriptData Pay
+    witness =
+        C.BuildTxWith $
+          C.ScriptWitness C.ScriptWitnessForSpending $
+            witnessHeader C.InlineScriptDatum redeemer C.zeroExecutionUnits
+    txIns = (,witness) <$> Map.keys (C.unUTxO unspentOutputs)
+    txOuts' = map C.fromCardanoTxOutToPV2TxInfoTxOut' $ Map.elems (C.unUTxO unspentOutputs)
+    txOuts = map mkPayTxOut txOuts'
+    utx =
+      E.emptyTxBodyContent
+      { C.txIns = txIns
+        , C.txOuts = txOuts
+        , C.txValidityLowerBound = fst validityRange
+        , C.txValidityUpperBound = snd validityRange
+      }
+    utxoIndex = mempty
+    in pure (C.CardanoBuildTx utx, utxoIndex)
+
+pay
+  :: (E.MonadEmulator m)
+  => MultiSigParams
+  -> Ledger.CardanoAddress
+  -> Ledger.PaymentPrivateKey
+  -> POSIXTime
+  -> m ()
+pay multisig wallet privateKey deadline = do
+  E.logInfo @String $ "Paying signed multisig"
+  (utx, utxoIndex) <- mkPayTx multisig deadline
+  void $ E.submitTxConfirmed utxoIndex wallet [toWitness privateKey] utx
 
 
-{-
-  (Holding, Propose v pkh deadline) ->
-    let oldValue = scriptInputValue (scriptContextTxInfo sc) (ownHash sc)
-        newValue = valueLockedBy (scriptContextTxInfo sc) (ownHash sc)
-        outDatum = snd (ownHashes sc)
-    in oldValue PlutusTx.== newValue
-      PlutusTx.&& oldValue `geq` v
-      PlutusTx.&& v `geq` minimumValue param -- instead of v >= 0
-      PlutusTx.&& case outDatum of
+mkCancelTx
+  :: (E.MonadEmulator m)
+  => MultiSigParams
+  -- ^ Multisig Params
+  -> POSIXTime
+  -> m (C.CardanoBuildTx, Ledger.UtxoIndex)
+mkCancelTx multisig deadline = do
+  let multisigAddr = mkMultiSigAddress multisig
+  unspentOutputs <- E.utxosAt multisigAddr
+  slotConfig <- asks pSlotConfig
+  -- current <- fst <$> E.currentTimeRange
+  let
+    validityRange = toValidityRange slotConfig $ Interval.to $ deadline - 1000
+    witnessHeader =
+      C.toCardanoTxInScriptWitnessHeader
+        (Ledger.getValidator <$> Scripts.vValidatorScript (typedValidator multisig))
+    redeemer = toHashableScriptData Cancel
+    witness =
+        C.BuildTxWith $
+          C.ScriptWitness C.ScriptWitnessForSpending $
+            witnessHeader C.InlineScriptDatum redeemer C.zeroExecutionUnits
+    txIns = (,witness) <$> Map.keys (C.unUTxO unspentOutputs)
+    txOuts' = map C.fromCardanoTxOutToPV2TxInfoTxOut' $ Map.elems (C.unUTxO unspentOutputs)
+    datum = Holding
+    txOuts = map (mkDatumUpdateTxOut datum) txOuts'
+    utx =
+      E.emptyTxBodyContent
+      { C.txIns = txIns
+        , C.txOuts = txOuts
+        , C.txValidityLowerBound = fst validityRange
+        , C.txValidityUpperBound = snd validityRange
+      }
+    utxoIndex = mempty
+    in pure (C.CardanoBuildTx utx, utxoIndex)
 
-      OutputDatum (Datum newDatum) -> case PlutusTx.fromBuiltinData newDatum of
-          Just Holding -> False
-          Just (Collecting v' pkh' deadline' sigs') ->
-            v PlutusTx.== v'
-            PlutusTx.&& pkh PlutusTx.== pkh'
-            PlutusTx.&& deadline PlutusTx.== deadline'
-            PlutusTx.&& sigs' PlutusTx.== []
+cancel
+  :: (E.MonadEmulator m)
+  => MultiSigParams
+  -> Ledger.CardanoAddress
+  -> Ledger.PaymentPrivateKey
+  -> POSIXTime
+  -> m ()
+cancel multisig wallet privateKey deadline = do
+  E.logInfo @String $ "Adding signature to contract of wallet: " <> show wallet
+  (utx, utxoIndex) <- mkCancelTx multisig deadline
+  void $ E.submitTxConfirmed utxoIndex wallet [toWitness privateKey] utx
 
-data Label =
-        Holding
-        | Collecting Value Ada.PubKeyHash POSIXTime [Ada.PubKeyHash]
 
-PlutusTx.unstableMakeIsData ''Label
-PlutusTx.makeLift ''Label
+mkDonateTx
+  :: SlotConfig
+  -> MultiSigParams
+  -- ^ The escrow contract
+  -> Ledger.CardanoAddress
+  -- ^ Wallet address
+  -> Value
+  -- ^ How much money to pay in
+  -> (C.CardanoBuildTx, Ledger.UtxoIndex)
+mkDonateTx slotConfig multisig wallet vl =
+  let multisigAddr = mkMultiSigAddress multisig
+      pkh = Ledger.PaymentPubKeyHash $ fromJust $ Ledger.cardanoPubKeyHash wallet
+      txOut = C.TxOut multisigAddr (toTxOutValue vl) (toTxOutInlineDatum pkh) C.ReferenceScriptNone
+      utx =
+        E.emptyTxBodyContent
+          { C.txOuts = [txOut]
+          }
+      utxoIndex = mempty
+   in (C.CardanoBuildTx utx, utxoIndex)
 
-data Input =
-        Propose Value Ada.PubKeyHash POSIXTime
-        | Add Ada.PubKeyHash
-        | Pay
-        | Cancel
--}
+donate
+  :: (E.MonadEmulator m)
+  => MultiSigParams
+  -> Ledger.CardanoAddress
+  -> Ledger.PaymentPrivateKey
+  -> Value
+  -> m ()
+donate multisig wallet privateKey vl = do
+  E.logInfo @String $ "Donate " <> show vl <> " to the script"
+  slotConfig <- asks pSlotConfig
+  let (utx, utxoIndex) = mkDonateTx slotConfig multisig wallet vl
+  void $ E.submitTxConfirmed utxoIndex wallet [toWitness privateKey] utx
+
+covIdx :: CoverageIndex
+covIdx = getCovIdx $$(PlutusTx.compile [||multiSigValidator||])
