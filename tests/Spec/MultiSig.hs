@@ -295,11 +295,11 @@ prop_MultiSig = E.propRunActions
 
 unitTest1 :: DL MultiSigModel ()
 unitTest1 = do
-              action $ Open w1 1000
-              action $ Propose 100000 w1 w2 20
+              action $ Open w1 10000000
+              action $ Propose 100000 w1 w2 20000000
 
               -- action $ Donate w2 10000
-              -- action $ AddSig w4
+              action $ AddSig w4
 
 
               -- action $ AddSig w4

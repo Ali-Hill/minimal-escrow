@@ -187,30 +187,29 @@ ownHash p = fst (ownHashes p)
 {-# INLINABLE multiSigValidator #-}
 multiSigValidator :: MultiSigParams -> Label -> Input -> ScriptContext -> Bool
 multiSigValidator param lbl inp sc = case (lbl, inp) of
-
-{-  case (lbl, inp) of
   (Holding, Propose v pkh deadline) ->
-    let oldValue = scriptInputValue (scriptContextTxInfo sc) (ownHash sc)
-        newValue = valueLockedBy (scriptContextTxInfo sc) (ownHash sc)
-        outDatum = snd (ownHashes sc)
+    let outDatum = snd (ownHashes sc)
+        -- oldValue = scriptInputValue (scriptContextTxInfo sc) (ownHash sc)
+        -- newValue = valueLockedBy (scriptContextTxInfo sc) (ownHash sc)
+        -- outDatum = snd (ownHashes sc)
     in -- oldValue PlutusTx.== newValue
        -- PlutusTx.&& oldValue `geq` v
        -- PlutusTx.&& v `geq` minimumValue param -- instead of v >= 0
        -- PlutusTx.&&
       case outDatum of
       OutputDatum (Datum newDatum) -> case PlutusTx.fromBuiltinData newDatum of
-          Just Holding -> False
-          Just (Collecting v' pkh' deadline' sigs') ->
-            v PlutusTx.== v'
+          Just Holding -> True
+          Just (Collecting v' pkh' deadline' sigs') -> False
+ {-           v PlutusTx.== v'
             PlutusTx.&& pkh PlutusTx.== pkh'
             PlutusTx.&& deadline PlutusTx.== deadline'
-            PlutusTx.&& sigs' PlutusTx.== []
+            PlutusTx.&& sigs' PlutusTx.== [] -}
           Nothing ->
             PlutusTx.traceError "Failed to decode output datum"
       OutputDatumHash _ ->
           PlutusTx.traceError "Expected OutputDatum, got OutputDatumHash"
       NoOutputDatum ->
-          PlutusTx.traceError "Expected OutputDatum, got NoOutputDatum" -}
+          PlutusTx.traceError "Expected OutputDatum, got NoOutputDatum"
 
   (Holding, _) -> False
 
@@ -313,6 +312,16 @@ mkDatumUpdateTxOut datum txout =
                     (toTxOutInlineDatum datum)
                     C.ReferenceScriptNone
 
+mkDatumUpdateTxOut' :: Ledger.CardanoAddress -> Label -> Value -> TxOut -> C.TxOut C.CtxTx C.ConwayEra
+mkDatumUpdateTxOut' address datum value txout =
+                  C.TxOut
+                    address
+                    (toTxOutValue value)
+                    C.TxOutDatumNone
+
+                   --  (toTxOutInlineDatum datum)
+                    C.ReferenceScriptNone
+
 
 checkEmpty :: [a] -> [a]
 checkEmpty [] = error "empty list"
@@ -341,7 +350,7 @@ mkProposeTx multisig wallet value deadline = do
     pkh = Ledger.PaymentPubKeyHash $ fromJust $ Ledger.cardanoPubKeyHash wallet
     uPkh = unPaymentPubKeyHash pkh
     validityRange = toValidityRange slotConfig $ Interval.to $ deadline - 1000
-    datum = Collecting value uPkh deadline []
+    newLabel = Collecting value uPkh deadline []
     witnessHeader =
       C.toCardanoTxInScriptWitnessHeader
         (Ledger.getValidator <$> Scripts.vValidatorScript (typedValidator multisig))
@@ -350,9 +359,10 @@ mkProposeTx multisig wallet value deadline = do
         C.BuildTxWith $
           C.ScriptWitness C.ScriptWitnessForSpending $
             witnessHeader C.InlineScriptDatum redeemer C.zeroExecutionUnits
+            -- (C.ScriptDatumForTxIn (toHashableScriptData newLabel)) redeemer C.zeroExecutionUnits
     txIns = (,witness) <$> Map.keys (C.unUTxO unspentOutputs)
     txOuts' = map C.fromCardanoTxOutToPV2TxInfoTxOut' $ Map.elems (C.unUTxO unspentOutputs)
-    txOuts = checkEmpty $ map (mkDatumUpdateTxOut datum) txOuts'
+    txOuts = checkEmpty $ map (mkDatumUpdateTxOut' multisigAddr newLabel value) txOuts'
     utx =
       E.emptyTxBodyContent
       { C.txIns = txIns
@@ -393,6 +403,7 @@ mkAddSigDatum sig txout =
         error "Expected OutputDatum, got NoOutputDatum"
 
 
+{-
 mkAddSigDatum' :: Ada.PubKeyHash -> C.TxOut C.CtxUTxO ConwayEra -> Label
 mkAddSigDatum' sig (C.TxOut _ _ tod _)  =
   case fromCardanoTxOutDatum' tod of
@@ -407,6 +418,7 @@ mkAddSigDatum' sig (C.TxOut _ _ tod _)  =
         error "Expected OutputDatum, got OutputDatumHash"
     NoOutputDatum ->
         error "Expected OutputDatum, got NoOutputDatum"
+-}
 
 -- fromCardanoTxOutDatum'
 
@@ -454,8 +466,8 @@ mkAddSigTx multisig wallet = do
           C.ScriptWitness C.ScriptWitnessForSpending $
             witnessHeader C.InlineScriptDatum redeemer C.zeroExecutionUnits
     txIns = (,witness) <$> Map.keys (C.unUTxO unspentOutputs)
-    -- datum = mkAddSigDatum uPkh (head txOuts')
-    datum = mkAddSigDatum' uPkh (head $ Map.elems (C.unUTxO unspentOutputs))
+    datum = mkAddSigDatum uPkh (head txOuts')
+    -- datum = mkAddSigDatum' uPkh (head $ Map.elems (C.unUTxO unspentOutputs))
     txOuts = map (mkDatumUpdateTxOut datum) txOuts'
     utx =
       E.emptyTxBodyContent
@@ -672,6 +684,11 @@ open multisig wallet privateKey vl = do
 
 covIdx :: CoverageIndex
 covIdx = getCovIdx $$(PlutusTx.compile [||multiSigValidator||])
+
+
+
+
+-- Collecting Value Ada.PubKeyHash POSIXTime [Ada.PubKeyHash]
 
 
 {-
