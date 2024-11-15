@@ -80,7 +80,7 @@ import Ledger.Address (toWitness, Address (..))
 import Ledger.Tx.CardanoAPI qualified as C
 import Ledger.Typed.Scripts (validatorCardanoAddress)
 import Ledger.Typed.Scripts qualified as Scripts
-import Plutus.Script.Utils.Scripts (ValidatorHash, datumHash)
+import Plutus.Script.Utils.Scripts (ValidatorHash, datumHash, validatorHash)
 import Plutus.Script.Utils.V2.Contexts (
   ScriptContext (ScriptContext, scriptContextTxInfo),
   TxInfo,
@@ -89,6 +89,8 @@ import Plutus.Script.Utils.V2.Contexts (
   txSignedBy,
  )
 import Plutus.Script.Utils.V2.Typed.Scripts qualified as V2
+import Plutus.Script.Utils.V2.Scripts qualified as V2
+
 import Plutus.Script.Utils.Value (Value, geq, lt)
 import PlutusLedgerApi.V1.Interval qualified as Interval
 import PlutusLedgerApi.V2 (Datum (Datum), Credential(..), OutputDatum (..))
@@ -103,6 +105,8 @@ import PlutusTx.Prelude (Eq ((==)))
 import qualified Data.Aeson.Encoding as Map
 import Cardano.Api (ConwayEra)
 -- (OutputDatum (OutputDatum))
+import Data.Either (fromRight)
+
 
 fromCardanoTxOutDatum' :: C.TxOutDatum C.CtxUTxO era -> OutputDatum
 fromCardanoTxOutDatum' C.TxOutDatumNone       =
@@ -182,16 +186,17 @@ ownHash p = fst (ownHashes p)
 -- | Haskell version of the above agda code
 {-# INLINABLE multiSigValidator #-}
 multiSigValidator :: MultiSigParams -> Label -> Input -> ScriptContext -> Bool
-multiSigValidator param lbl inp sc = True
-{- -case (lbl, inp) of
-  (Holding, Propose v pkh deadline) -> True
- {-   let -- oldValue = scriptInputValue (scriptContextTxInfo sc) (ownHash sc)
-        -- newValue = valueLockedBy (scriptContextTxInfo sc) (ownHash sc)
+multiSigValidator param lbl inp sc = case (lbl, inp) of
+
+{-  case (lbl, inp) of
+  (Holding, Propose v pkh deadline) ->
+    let oldValue = scriptInputValue (scriptContextTxInfo sc) (ownHash sc)
+        newValue = valueLockedBy (scriptContextTxInfo sc) (ownHash sc)
         outDatum = snd (ownHashes sc)
     in -- oldValue PlutusTx.== newValue
-      -- PlutusTx.&& oldValue `geq` v
-      -- PlutusTx.&& v `geq` minimumValue param -- instead of v >= 0
-      -- PlutusTx.&&
+       -- PlutusTx.&& oldValue `geq` v
+       -- PlutusTx.&& v `geq` minimumValue param -- instead of v >= 0
+       -- PlutusTx.&&
       case outDatum of
       OutputDatum (Datum newDatum) -> case PlutusTx.fromBuiltinData newDatum of
           Just Holding -> False
@@ -265,7 +270,7 @@ multiSigValidator param lbl inp sc = True
       OutputDatumHash _ ->
           PlutusTx.traceError "Expected OutputDatum, got OutputDatumHash"
       NoOutputDatum ->
-          PlutusTx.traceError "Expected OutputDatum, got NoOutputDatum" -}
+          PlutusTx.traceError "Expected OutputDatum, got NoOutputDatum"
 
 data MultiSig
 instance Scripts.ValidatorTypes MultiSig where
@@ -624,6 +629,14 @@ donate multisig wallet privateKey vl = do
   let (utx, utxoIndex) = mkDonateTx slotConfig multisig wallet vl
   void $ E.submitTxConfirmed utxoIndex wallet [toWitness privateKey] utx
 
+
+toCardanoPaymentCredential :: Credential -> Either Ada.ToCardanoError C.PaymentCredential
+toCardanoPaymentCredential (PubKeyCredential _) = error "Should be script"
+toCardanoPaymentCredential (ScriptCredential validatorHash) = C.PaymentCredentialByScript <$> C.toCardanoScriptHash validatorHash
+
+
+
+
 mkOpenTx
   :: MultiSigParams
   -- ^ The escrow contract
@@ -634,12 +647,15 @@ mkOpenTx multisig vl =
   let multisigAddr = mkMultiSigAddress multisig
       datum = Holding
       txOut = C.TxOut multisigAddr (toTxOutValue vl) (toTxOutInlineDatum datum) C.ReferenceScriptNone
+      -- (toTxOutInlineDatum datum)
+      --  C.TxOutDatumNone
       utx =
         E.emptyTxBodyContent
           { C.txOuts = [txOut]
           }
       utxoIndex = mempty
    in (C.CardanoBuildTx utx, utxoIndex)
+
 
 open
   :: (E.MonadEmulator m)
@@ -651,8 +667,40 @@ open
 open multisig wallet privateKey vl = do
   E.logInfo @String $ "Open MultiSig with value: " <> show vl
   slotConfig <- asks pSlotConfig
-  let (utx, utxoIndex) = mkDonateTx slotConfig multisig wallet vl
+  let (utx, utxoIndex) = mkOpenTx multisig vl
   void $ E.submitTxConfirmed utxoIndex wallet [toWitness privateKey] utx
 
 covIdx :: CoverageIndex
 covIdx = getCovIdx $$(PlutusTx.compile [||multiSigValidator||])
+
+
+{-
+mkOpenTx
+  :: MultiSigParams
+  -- ^ The escrow contract
+  -> Value
+  -- ^ How much money to pay in
+  -> (C.CardanoBuildTx, Ledger.UtxoIndex)
+mkOpenTx multisig vl =
+  let multisigAddr = mkMultiSigAddress multisig
+      datum = Holding
+      txOut = C.TxOut
+                ( C.makeShelleyAddressInEra
+                    C.shelleyBasedEra
+                    testnet
+                    (fromRight (error "couldn't get script credential") (toCardanoPaymentCredential $ Ada.cardanoAddressCredential multisigAddr))
+                    C.NoStakeAddress
+                )
+                (toTxOutValue vl)
+                (toTxOutInlineDatum datum)
+                C.ReferenceScriptNone
+
+
+        -- C.TxOut multisigAddr (toTxOutValue vl) (toTxOutInlineDatum datum) C.ReferenceScriptNone
+      utx =
+        E.emptyTxBodyContent
+          { C.txOuts = [txOut]
+          }
+      utxoIndex = mempty
+   in (C.CardanoBuildTx utx, utxoIndex)
+-}
