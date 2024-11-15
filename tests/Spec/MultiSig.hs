@@ -106,6 +106,7 @@ import Contract.MultiSig (MultiSigParams (..),
                           donate,
                           cancel,
                           pay,
+                          open
                          )
 
 import Contract.MultiSig qualified as Impl
@@ -123,26 +124,53 @@ import qualified Plutus.Script.Utils.Value as Ada
 
 type Wallet = Integer
 
--- Model should be
+walletPubKeyHash :: Wallet -> Ledger.PubKeyHash
+walletPubKeyHash =
+    Ledger.pubKeyHash
+    . Ledger.unPaymentPubKey
+    . (E.knownPaymentPublicKeys !!)
+    . pred
+    . fromIntegral
 
-{-
- possible_signatories :: [Ada.PubKeyHash]
- , signature :: [Ada.PubKey]
- , minNumSignatures :: Integer
- , minimumValue :: Value
- , deadline :: Slot
- , proposedValue :: Value
--}
+w1, w2, w3, w4, w5 :: Wallet
+w1 = 1
+w2 = 2
+w3 = 3
+w4 = 4
+w5 = 5
+
+walletAddress :: Wallet -> Ledger.CardanoAddress
+walletAddress = (E.knownAddresses !!) . pred . fromIntegral
+
+walletPaymentPubKeyHash :: Wallet -> Ledger.PaymentPubKeyHash
+walletPaymentPubKeyHash =
+  Ledger.PaymentPubKeyHash
+    . Ledger.pubKeyHash
+    . Ledger.unPaymentPubKey
+    . (E.knownPaymentPublicKeys !!)
+    . pred
+    . fromIntegral
+
+walletPrivateKey :: Wallet -> Ledger.PaymentPrivateKey
+walletPrivateKey = (E.knownPaymentPrivateKeys !!) . pred . fromIntegral
+
+modelParams :: MultiSigParams
+modelParams = MultiSigParams
+  { signatories = map walletPubKeyHash [1 .. 5]
+  , minNumSignatures = 2
+  , minimumValue = Ada.lovelaceValueOf 1000
+  }
+
 
 data MultiSigModel = MultiSigModel
   { _possible_signatories :: [Wallet],
     _signatures :: [Wallet],
     _minNumSignatures :: Integer,
-    _minimumValue :: Value,
+    _minimumValue :: Integer,
     _target :: Wallet,
     _deadline :: Slot,
-    _proposedValue :: Value,
-    _contractValue :: Value
+    _proposedValue :: Integer,
+    _contractValue :: Integer
   }
   deriving (Eq, Show, Generic)
 
@@ -162,6 +190,7 @@ instance ContractModel MultiSigModel where
     | Donate Wallet Integer
     | Cancel Wallet
     | Pay Wallet
+    | Open Wallet Integer
     deriving (Show, Eq, Generic)
 
   initialState =
@@ -169,11 +198,11 @@ instance ContractModel MultiSigModel where
       { _possible_signatories = [],
         _signatures = [],
         _minNumSignatures = 0,
-        _minimumValue = Ada.valueOf Ledger.minAdaTxOutEstimated,
+        _minimumValue = 2,
         _target = 0,
         _deadline = 0,
-        _proposedValue = Ada.adaValueOf 0,
-        _contractValue = Ada.adaValueOf 0
+        _proposedValue = 0,
+        _contractValue = 0
       }
 
   nextState a = void $ case a of
@@ -186,16 +215,23 @@ instance ContractModel MultiSigModel where
       signatures %= (w :)
       wait 1
     Donate w v -> do
-      contractValue %= (<> v)
-      withdraw (walletAddress w) v -- may have to make it integer
+      contractValue %= (+ v)
+      withdraw (walletAddress w) (Ada.adaValueOf $ fromInteger v)
       wait 1
     Cancel w -> do
       -- probably want to set the contract value to 0
       wait 1
     Pay w -> do
-      deposit (walletAddress target) proposedValue
-      contractValue %= (<> inv proposedValue)
+      oldContractValue <- viewContractState contractValue
+      target <- viewContractState target
+      proposedValue <- viewContractState proposedValue
+      deposit (walletAddress target) (Ada.adaValueOf $ fromInteger proposedValue)
+      contractValue .= (oldContractValue - proposedValue)
       -- probably also want to set the contract value to 0
+      wait 1
+    Open w v -> do
+      contractValue %= (+ v)
+      withdraw (walletAddress w) (Ada.adaValueOf $ fromInteger v)
       wait 1
 
   precondition s a = case a of
@@ -204,7 +240,8 @@ instance ContractModel MultiSigModel where
     Donate w v -> True
     Cancel w -> True
     Pay w -> True
-
+    Open w v -> True
+   
   validFailingAction _ _ = False
 
   --TODO: Define arbitraryAction
@@ -219,9 +256,51 @@ act :: Action MultiSigModel -> E.EmulatorM ()
 act = \case
   Propose v w t s ->
     propose
-      ModelParams
+      modelParams
       (walletAddress w)
       (walletAddress t)
-      (walletPricateKey w)
-      v
-      fromCardanoSlotNo s
+      (walletPrivateKey w)
+      (Ada.adaValueOf $ fromInteger v)
+      (TimeSlot.slotToEndPOSIXTime def s)
+  AddSig w ->
+    addSig
+      modelParams
+      (walletAddress w)
+      (walletPrivateKey w)
+  Donate w v ->
+    donate
+      modelParams
+      (walletAddress w)
+      (walletPrivateKey w)
+      (Ada.adaValueOf $ fromInteger v)
+  Cancel w ->
+    cancel
+      modelParams
+      (walletAddress w)
+      (walletPrivateKey w)
+  Pay w ->
+    pay
+      modelParams
+      (walletAddress w)
+      (walletPrivateKey w)
+  Open w v ->
+    open
+      modelParams
+      (walletAddress w)
+      (walletPrivateKey w)
+      (Ada.adaValueOf $ fromInteger v)
+
+prop_MultiSig :: Actions MultiSigModel -> Property
+prop_MultiSig = E.propRunActions
+
+unitTest1 :: DL MultiSigModel ()
+unitTest1 = do
+              action $ Open w1 1000
+              -- action $ Donate w2 10000
+              action $ AddSig w4
+
+              -- action $ Propose 10 w1 w2 20
+              -- action $ AddSig w4
+
+prop_Check :: QC.Property
+prop_Check = QC.withMaxSuccess 1 $ forAllDL unitTest1 prop_MultiSig
