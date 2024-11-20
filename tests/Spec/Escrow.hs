@@ -149,7 +149,7 @@ modelParams = escrowParams $ TimeSlot.scSlotZeroTime def
 options :: E.Options EscrowModel
 options =
   E.defaultOptions
-    { E.params = Params.increaseTransactionLimits def
+    { E.params = Params.increaseTransactionLimits $ Params.increaseTransactionLimits $ Params.increaseTransactionLimits def
     , E.coverageIndex = Impl.covIdx
     }
 

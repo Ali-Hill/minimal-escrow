@@ -121,6 +121,7 @@ import Test.QuickCheck.DynamicLogic qualified as QCD
 import Plutus.Contract.Test.Certification.Run (certifyWithOptions)
 import qualified Ledger
 import qualified Plutus.Script.Utils.Value as Ada
+import qualified Cardano.Node.Emulator as E
 
 type Wallet = Integer
 
@@ -210,7 +211,7 @@ instance ContractModel MultiSigModel where
       target .= t
       proposedValue .= v
       deadline .= s
-      wait 1
+      wait 2
     AddSig w -> do
       signatures %= (w :)
       wait 1
@@ -247,7 +248,7 @@ instance ContractModel MultiSigModel where
   --TODO: Define arbitraryAction
 
 instance RunModel MultiSigModel E.EmulatorM where
-    perform _ cmd _ = lift $ void $ act cmd
+    perform _ cmd _ = lift $ act cmd
 
 -- To catch errors use voidCatch
 -- voidCatch m = catchError (void m) (\ _ -> pure ())
@@ -291,18 +292,49 @@ act = \case
       (Ada.adaValueOf $ fromInteger v)
 
 prop_MultiSig :: Actions MultiSigModel -> Property
-prop_MultiSig = E.propRunActions
+prop_MultiSig = E.propRunActionsWithOptions options
 
 unitTest1 :: DL MultiSigModel ()
 unitTest1 = do
-              action $ Open w1 10000000
-              action $ Propose 100000 w1 w2 20000000
-
+              action $ Open w1 1000
+              -- action $ Donate w1 10000000
+              action $ Propose 10 w4 w2 200
               -- action $ Donate w2 10000
               action $ AddSig w4
+              action $ AddSig w5
+              action $ AddSig w1
+              action $ Pay w4
 
 
               -- action $ AddSig w4
 
 prop_Check :: QC.Property
-prop_Check = QC.withMaxSuccess 1 $ forAllDL unitTest1 prop_MultiSig
+prop_Check = QC.withMaxSuccess 1 $ QC.noShrinking $ forAllDL unitTest1 prop_MultiSig
+
+
+tests :: TestTree
+tests =
+  testGroup
+    "escrow"
+    [ checkPredicateOptions
+        options
+        "can open"
+        ( hasValidatedTransactionCountOfTotal 1 1
+            -- .&&. walletFundsChange (walletAddress w1) (Ada.adaValueOf (-10000000))
+        )
+        $ do
+          act $ Open w1 10000000
+    , checkPredicateOptions
+        options
+        "can redeem"
+        ( hasValidatedTransactionCountOfTotal 3 3
+           --  .&&. walletFundsChange (walletAddress w1) (Value.adaValueOf (-10))
+           --  .&&. walletFundsChange (walletAddress w2) (Value.adaValueOf 10)
+            -- .&&. walletFundsChange (walletAddress w3) mempty
+        )
+        $ do
+          act $ Open w1 10000000
+          act $ Propose 100000 w4 w2 200
+          act $ AddSig w4
+
+    ]
