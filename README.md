@@ -1,48 +1,29 @@
-# Minimal Plutus Testing Examples Repository
+# Dogfooding session: Testing DApps
 
 ## Overview 
 
-This repo contains a variety of minimal examples showcasing the testing of DApps written in plutus using the quickcheck contractmodel library. This contains examples using a variety of techniques and emulators. The emulators include the plutus-apps emulator, cooked emulator and the cardano-node-emulator. Techniques include model-based property testing, threat modelling such as double satisfaction as well as negative testing. Each example is contained in a separate branch and written with a minimal configuration so that it can be taken and adapted for other developers. 
+This example is a multisig one, developed for a Plutus HA meeting dogfooding session.
+There are multiple possible goals for this session, including:
 
-## Examples 
+- Getting people to challenge a specification, and finds potential loopholes in them
+- Learn how to write unit tests using the Contract model
+- Learn how to write the contract model
+- Learn how to complete the contract model to use QuickCheck-dynamic for Property-based testing
 
-The notable branches are listed below by emulator: 
+There is no wrong or right way to do this, and the goal is to learn and have fun. You can also use other testing libraries.
 
-The main branch includes the `cardano-node-emulator` version of the escrow contract as it is the most up-to-date example. 
+There are multiple (a lot?) of vulnerabilities in this contract. Try to come up with ways to exploit them.
 
-*cardano-node-emulator*
 
-1. escrow-node-emulator
-2. vesting-node-emulator
+## Informal specification
 
-*cooked emuator*
-
-1. escrow-cooked
-2. minimal-lotto-experimental
-3. auction-cooked
-
-*plutus-apps emulator*
-
-1. Escrow
-2. EscrowNoCoverage
-3. Vesting 
-4. governance
+This is a multisig contract. 
 
 ## Current Build Instructions
 
 1. run `nix develop`
-2. `cabal build escrow`
+2. `cabal repl multisig-test`
 
-To enter testing repl after step 2 run in the root directory:
-
- - `cabal repl escrow-test`
-
-To run tests after step 2 run in the root directory:
-
- - `cabal run escrow-test`
-
-If you want to run a specific test such as Double Satisfaction in the repl do:
-
+- `import Spec.MultiSig`
 - `import Test.QuickCheck`
-- `import Spec.Escrow`
-- `quickCheck prop_Escrow_DoubleSatisfaction`
+- `quickCheck prop_Check`
