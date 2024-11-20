@@ -103,7 +103,7 @@ import Test.Tasty.QuickCheck (
 import Contract.MultiSig (MultiSigParams (..),
                           propose,
                           addSig,
-                          donate,
+                       --   donate,
                           cancel,
                           pay,
                           open
@@ -188,7 +188,7 @@ instance ContractModel MultiSigModel where
   data Action MultiSigModel
     = Propose Integer Wallet Wallet Slot
     | AddSig Wallet
-    | Donate Wallet Integer
+--    | Donate Wallet Integer
     | Cancel Wallet
     | Pay Wallet
     | Open Wallet Integer
@@ -215,11 +215,12 @@ instance ContractModel MultiSigModel where
     AddSig w -> do
       signatures %= (w :)
       wait 1
-    Donate w v -> do
+{-    Donate w v -> do
       contractValue %= (+ v)
-      withdraw (walletAddress w) (Ada.adaValueOf $ fromInteger v)
+      withdraw (walletAddress w) (Ada.adaValueOf $ fromInteger v) -}
       wait 1
     Cancel w -> do
+      signatures .= []
       -- probably want to set the contract value to 0
       wait 1
     Pay w -> do
@@ -238,7 +239,7 @@ instance ContractModel MultiSigModel where
   precondition s a = case a of
     Propose v w t s -> True
     AddSig w -> True
-    Donate w v -> True
+ --   Donate w v -> True
     Cancel w -> True
     Pay w -> True
     Open w v -> True
@@ -268,12 +269,12 @@ act = \case
       modelParams
       (walletAddress w)
       (walletPrivateKey w)
-  Donate w v ->
+ {- Donate w v ->
     donate
       modelParams
       (walletAddress w)
       (walletPrivateKey w)
-      (Ada.adaValueOf $ fromInteger v)
+      (Ada.adaValueOf $ fromInteger v) -}
   Cancel w ->
     cancel
       modelParams
@@ -298,11 +299,14 @@ unitTest1 :: DL MultiSigModel ()
 unitTest1 = do
               action $ Open w1 1000
               -- action $ Donate w1 10000000
-              action $ Propose 10 w4 w2 200
+              action $ Propose 10 w4 w2 10
               -- action $ Donate w2 10000
               action $ AddSig w4
+              waitUntilDL 12
+              action $ Cancel w2
+              action $ Propose 10 w1 w2 20
+              action $ AddSig w4
               action $ AddSig w5
-              action $ AddSig w1
               action $ Pay w4
 
 

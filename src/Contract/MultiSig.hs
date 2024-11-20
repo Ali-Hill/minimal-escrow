@@ -254,19 +254,19 @@ multiSigValidator param lbl inp sc = case (lbl, inp) of
     in PlutusTx.length sigs PlutusTx.>= minNumSignatures param
        PlutusTx.&& case outDatum of
         OutputDatum (Datum newDatum) -> case PlutusTx.fromBuiltinData newDatum of
-            Just Holding -> True
-              -- valuePaidTo (scriptContextTxInfo sc) pkh PlutusTx.== v
-              -- PlutusTx.&& oldValue PlutusTx.== (v PlutusTx.+ newValue)
-            Just (Collecting _ _ _ _) -> True
+            Just Holding ->
+              valuePaidTo (scriptContextTxInfo sc) pkh PlutusTx.== v
+              PlutusTx.&& oldValue PlutusTx.== (v PlutusTx.+ newValue)
+            Just (Collecting _ _ _ _) -> False
             Nothing ->
-              True
+              False
         OutputDatumHash _ ->
             PlutusTx.traceError "Expected OutputDatum, got OutputDatumHash"
         NoOutputDatum ->
             PlutusTx.traceError "Expected OutputDatum, got NoOutputDatum"
            
   (Collecting v pkh deadline sigs, Cancel) ->
-    let outDatum = snd (ownHashes sc)
+    let outDatum = getOutputDatum sc
         oldValue = scriptInputValue (scriptContextTxInfo sc) (ownHash' sc)
         newValue = valueLockedBy (scriptContextTxInfo sc) (ownHash' sc)
     in oldValue PlutusTx.== newValue
@@ -484,15 +484,25 @@ addSig multisig wallet privateKey = do
   (utx, utxoIndex) <- mkAddSigTx multisig wallet
   void $ E.submitTxConfirmed utxoIndex wallet [toWitness privateKey] utx
 
+mkPayUpdateTxOut :: Value -> TxOut -> C.TxOut C.CtxTx C.ConwayEra
+mkPayUpdateTxOut vl txout =
+  case C.toCardanoAddressInEra testnet (txOutAddress txout) of
+    Left _ -> error "Couldn't decode address"
+    Right addr -> C.TxOut
+                    addr
+                    (toTxOutValue ((txOutValue txout) <> (PlutusTx.inv vl) ))
+                    (toTxOutInlineDatum Holding)
+                    C.ReferenceScriptNone
 
-mkPayTxOut :: TxOut -> C.TxOut C.CtxTx C.ConwayEra
+
+mkPayTxOut :: TxOut -> [ C.TxOut C.CtxTx C.ConwayEra ]
 mkPayTxOut txout =
   case txOutDatum txout of
     OutputDatum (Datum newDatum) ->
       case PlutusTx.fromBuiltinData newDatum of
           Just Holding -> error "Can't pay in holding state"
           Just (Collecting vl pkh _ _) ->
-            C.TxOut
+            [ C.TxOut
               ( C.makeShelleyAddressInEra
                   C.shelleyBasedEra
                   testnet
@@ -500,8 +510,10 @@ mkPayTxOut txout =
                   C.NoStakeAddress
               )
               (toTxOutValue vl)
-              (toTxOutInlineDatum Holding)
+              C.TxOutDatumNone
               C.ReferenceScriptNone
+            ,
+              mkPayUpdateTxOut vl txout ]
           Nothing ->
             error "Failed to decode output datum"
     OutputDatumHash _ ->
@@ -534,7 +546,7 @@ mkPayTx multisig = do
           C.ScriptWitness C.ScriptWitnessForSpending $
             witnessHeader C.InlineScriptDatum redeemer C.zeroExecutionUnits
     txIns = (,witness) <$> Map.keys (C.unUTxO unspentOutputs)
-    txOuts = checkEmpty $ map mkPayTxOut txOuts'
+    txOuts = checkEmpty $ mkPayTxOut (head txOuts') -- checkEmpty $ map mkPayTxOut txOuts'
     --     lst = Trace.trace (show txOuts') txOuts'
 --    datum = mkAddSigDatum uPkh (head lst)
     utx =
@@ -570,7 +582,7 @@ mkCancelTx multisig = do
   let
     txOuts' = map C.fromCardanoTxOutToPV2TxInfoTxOut' $ Map.elems (C.unUTxO unspentOutputs)
     deadline = getDeadline $ head txOuts'
-    validityRange = toValidityRange slotConfig $ Interval.to $ deadline - 1000
+    validityRange = toValidityRange slotConfig $ Interval.from $ deadline
     witnessHeader =
       C.toCardanoTxInScriptWitnessHeader
         (Ledger.getValidator <$> Scripts.vValidatorScript (typedValidator multisig))
@@ -589,8 +601,7 @@ mkCancelTx multisig = do
         , C.txValidityLowerBound = fst validityRange
         , C.txValidityUpperBound = snd validityRange
       }
-    utxoIndex = mempty
-    in pure (C.CardanoBuildTx utx, utxoIndex)
+    in pure (C.CardanoBuildTx utx, unspentOutputs)
 
 cancel
   :: (E.MonadEmulator m)
