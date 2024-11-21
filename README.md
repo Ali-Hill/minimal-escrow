@@ -17,7 +17,8 @@ There are multiple (a lot?) of vulnerabilities in this contract. Try to come up 
 
 ## Informal specification
 
-This is a multisig contract. 
+This is a multisig contract. Its source code can be found at /src/Contract/MultiSig.hs with both the on-chain code (the validator) and the off-chain code written to build transactions.
+
 Its goal is to allow multiple parties to agree on a transaction before it is executed.
 
 There are 5 different endpoints:
@@ -39,6 +40,8 @@ You can then learn more about the contract model here:
 - https://engineering.iog.io/2022-09-28-introduce-q-d/
 
 This will allow you to expand on those unit tests to write more adversarial ones, and also to expand on the contract model to use QuickCheck-dynamic for Property-based testing.
+
+If you want, you can start from scratch and write your own test suite or contract model without using the provided ones.
 
 ## Current Build Instructions
 
