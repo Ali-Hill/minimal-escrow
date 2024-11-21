@@ -181,7 +181,7 @@ options :: E.Options MultiSigModel
 options =
   E.defaultOptions
     { E.params = Params.increaseTransactionLimits def
-    , E.coverageIndex = Impl.covIdx
+    -- , E.coverageIndex = Impl.covIdx
     }
 
 instance ContractModel MultiSigModel where
