@@ -2,7 +2,7 @@
 # https://www.github.com/input-output-hk/iogx#31-flakenix
 
 {
-  description = "Minimal Escrow using Cardano Node Emulator";
+  description = "MultiSig contract for dogfooding session";
 
 
   inputs = {

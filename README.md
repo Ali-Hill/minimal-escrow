@@ -1,48 +1,49 @@
-# Minimal Plutus Testing Examples Repository
+# Dogfooding session: Testing DApps
 
 ## Overview 
 
-This repo contains a variety of minimal examples showcasing the testing of DApps written in plutus using the quickcheck contractmodel library. This contains examples using a variety of techniques and emulators. The emulators include the plutus-apps emulator, cooked emulator and the cardano-node-emulator. Techniques include model-based property testing, threat modelling such as double satisfaction as well as negative testing. Each example is contained in a separate branch and written with a minimal configuration so that it can be taken and adapted for other developers. 
+This example is a multisig one, developed for a Plutus HA meeting dogfooding session.
+There are multiple possible goals for this session, including:
 
-## Examples 
+- Getting people to challenge a specification, and finds potential loopholes in them
+- Learn how to write unit tests using the Contract model
+- Learn how to write the contract model
+- Learn how to complete the contract model to use QuickCheck-dynamic for Property-based testing
 
-The notable branches are listed below by emulator: 
+There is no wrong or right way to do this, and the goal is to learn and have fun. You can also use other testing libraries.
 
-The main branch includes the `cardano-node-emulator` version of the escrow contract as it is the most up-to-date example. 
+There are multiple (a lot?) of vulnerabilities in this contract. Try to come up with ways to exploit them.
 
-*cardano-node-emulator*
 
-1. escrow-node-emulator
-2. vesting-node-emulator
+## Informal specification
 
-*cooked emuator*
+This is a multisig contract. 
+Its goal is to allow multiple parties to agree on a transaction before it is executed.
 
-1. escrow-cooked
-2. minimal-lotto-experimental
-3. auction-cooked
+There are 5 different endpoints:
+- Open: Open a multisig contract
+- Propose: Propose a transaction
+- AddSig: Add a signature to a transaction
+- Pay: Pay from the contract to the beneficiary
+- Cancel: Cancel a transaction
 
-*plutus-apps emulator*
+A set number of signatories must be reached before a transaction can be executed.
 
-1. Escrow
-2. EscrowNoCoverage
-3. Vesting 
-4. governance
+A "security" requirement is that no transaction can be executed without the required number of signatories.
+A "liveness" requirement is that it should not be possible to lock the contract indefinitely.
+
+An instance of the contract model has been provided in /Spec/MultiSig.hs to be able to start writing unit tests.
+
+Useful resources to write it from scratch, or improve the one provided:
+
+- https://plutus-apps.readthedocs.io/en/latest/plutus/tutorials/contract-testing.html
+- https://engineering.iog.io/2022-09-28-introduce-q-d/
 
 ## Current Build Instructions
 
 1. run `nix develop`
-2. `cabal build escrow`
+2. `cabal repl multisig-test`
 
-To enter testing repl after step 2 run in the root directory:
-
- - `cabal repl escrow-test`
-
-To run tests after step 2 run in the root directory:
-
- - `cabal run escrow-test`
-
-If you want to run a specific test such as Double Satisfaction in the repl do:
-
+- `import Spec.MultiSig`
 - `import Test.QuickCheck`
-- `import Spec.Escrow`
-- `quickCheck prop_Escrow_DoubleSatisfaction`
+- `quickCheck prop_Check` (or any other property you want to test or unit test that you want to execute)

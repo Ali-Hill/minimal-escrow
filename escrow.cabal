@@ -1,5 +1,5 @@
 cabal-version:   3.0
-name:            escrow
+name:            multisig
 -- version:         1.2.0.0
 version:         1.3.0.0
 maintainer:      alasdair.hill@iohk.io
@@ -35,9 +35,8 @@ common lang
 library
   import:             lang
   exposed-modules:
-    Contract.Escrow
     Contract.MultiSig
-    Spec.Escrow
+    Spec.MultiSig
   hs-source-dirs:     src
                       tests
 
@@ -53,7 +52,6 @@ library
     , plutus-contract-certification-node
 
   --------------------------
-  --nix log /nix/store/hzc7dw6ak5kqrqazghngyr1f8a27l327-escrow-plan-to-nix-pkgs.drv Other IOG dependencies
   --------------------------
   build-depends:
     cardano-api:{cardano-api, gen, internal}
@@ -101,7 +99,7 @@ library
     , time
 
 
-test-suite escrow-test
+test-suite multisig-test
   import:             lang
   type:               exitcode-stdio-1.0
   main-is:            Spec.hs
@@ -110,7 +108,6 @@ test-suite escrow-test
   default-language: Haskell2010
   ghc-options:      -Wno-unused-packages
   other-modules:
-    Spec.Escrow
     Spec.MultiSig
 
   --------------------

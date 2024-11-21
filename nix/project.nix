@@ -9,7 +9,7 @@ let
       isCross = pkgs.stdenv.hostPlatform != pkgs.stdenv.buildPlatform;
     in
     {
-      name = "esrow";
+      name = "multisig";
 
       src = ../.;
 
