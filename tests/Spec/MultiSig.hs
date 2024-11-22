@@ -185,11 +185,12 @@ data MultiSigModel = MultiSigModel
 makeLenses ''MultiSigModel
 
 options :: E.Options MultiSigModel
-options =
+options = E.defaultOptions
+{- NOTE: Need to increase transaction limits if coverage is enabled.
   E.defaultOptions
     { E.params = Params.increaseTransactionLimits def
     -- , E.coverageIndex = Impl.covIdx
-    }
+    } -}
 
 instance ContractModel MultiSigModel where
   data Action MultiSigModel
@@ -376,7 +377,7 @@ unitTest4 = do
   action $ Propose 29 w2 w5 13
 
 prop_Check :: QC.Property
-prop_Check = QC.withMaxSuccess 1 $ QC.noShrinking $ forAllDL unitTest4 prop_MultiSig
+prop_Check = QC.withMaxSuccess 1 $ QC.noShrinking $ forAllDL unitTest1 prop_MultiSig
 
 tests :: TestTree
 tests =
