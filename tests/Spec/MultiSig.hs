@@ -296,6 +296,7 @@ instance ContractModel MultiSigModel where
 instance RunModel MultiSigModel E.EmulatorM where
     perform _ cmd _ = lift $ act cmd
 
+-- voidCatch m = catchError (void m) (\ _ -> pure ())
 
 act :: Action MultiSigModel -> E.EmulatorM ()
 act = \case
@@ -374,21 +375,8 @@ unitTest4 = do
   action $ Pay w2
   action $ Propose 29 w2 w5 13
 
-
 prop_Check :: QC.Property
 prop_Check = QC.withMaxSuccess 1 $ QC.noShrinking $ forAllDL unitTest4 prop_MultiSig
-
-
-{-
- [[+]Open 5 59,
-  [+]Propose 28 4 3 (Slot {getSlot = 127}),
-  [+]AddSig 4,
-  [+]AddSig 1,
-  [+]Pay 5,
-  [+]Propose 16 1 4 (Slot {getSlot = 137}),
-  [+]Pay 3]
--}
-
 
 tests :: TestTree
 tests =
@@ -397,6 +385,7 @@ tests =
         [
           -- unit tests
           testProperty "unit test 1" prop_Check
+          , testProperty "QuickCheck ContractModel" prop_MultiSig
         ],
       testGroup "Negative tests"
         [
