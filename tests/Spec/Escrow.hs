@@ -19,12 +19,14 @@ module Spec.Escrow (
   prop_NoLockedFunds,
   prop_validityChecks,
   checkPropEscrowWithCoverage,
+  optionsCoverage,
+  options,
   EscrowModel,
-{-  normalCertification,
-  normalCertification',
-  quickCertificationWithCheckOptions,
-  outputCoverageOfQuickCertification,
-  runS -}
+  {-  normalCertification,
+    normalCertification',
+    quickCertificationWithCheckOptions,
+    outputCoverageOfQuickCertification,
+    runS -}
 ) where
 
 import Control.Lens (At (at), makeLenses, to, (%=), (.=), (^.))
@@ -127,16 +129,16 @@ import Test.Tasty.QuickCheck (
 
 import Control.Monad.Except (catchError)
 
+import Data.IORef (IORef)
 import Plutus.Contract.Test.Certification
 import Plutus.Contract.Test.Certification.Run
-import Test.QuickCheck.DynamicLogic qualified as QCD
 import Plutus.Contract.Test.Certification.Run (certifyWithOptions)
-import Data.IORef (IORef)
+import Test.QuickCheck.DynamicLogic qualified as QCD
 
+import Cardano.Node.Emulator qualified as E
 import PlutusTx.Coverage
-import qualified Cardano.Node.Emulator as E
-import Test.Tasty.HUnit
 import Prettyprinter qualified as Pretty
+import Test.Tasty.HUnit
 
 type Wallet = Integer
 
@@ -249,16 +251,16 @@ instance ContractModel EscrowModel where
            | Prelude.not . Data.Foldable.null $
               s ^. contractState . contributions . to Map.keys
            ]
-    where
-      slot = s ^. currentSlot . to fromCardanoSlotNo
-      beforeRefund = slot < s ^. contractState . refundSlot
-      afterRefund = Prelude.not beforeRefund
-      prefer b = if b then 10 else 1
+   where
+    slot = s ^. currentSlot . to fromCardanoSlotNo
+    beforeRefund = slot < s ^. contractState . refundSlot
+    afterRefund = Prelude.not beforeRefund
+    prefer b = if b then 10 else 1
 
 instance RunModel EscrowModel E.EmulatorM where
   perform _ cmd _ = lift $ voidCatch $ act cmd
 
-voidCatch m = catchError (void m) (\ _ -> pure ())
+voidCatch m = catchError (void m) (\_ -> pure ())
 
 act :: Action EscrowModel -> E.EmulatorM ()
 act = \case
@@ -329,15 +331,15 @@ observeUTxOEscrow = do
   waitUntilDL 100
   action $ Refund w1
   observe "After refund" $ \_ cst -> numUTxOsAt addr cst == 0
-  where
-    addr = Scripts.validatorCardanoAddressAny Params.testnet $ typedValidator modelParams
+ where
+  addr = Scripts.validatorCardanoAddressAny Params.testnet $ typedValidator modelParams
 
-    numUTxOsAt addr cst =
-      Data.Foldable.length
-        [ ()
-        | TxOut (AddressInEra _ addr') _ _ _ <- Map.elems . unUTxO $ utxo cst
-        , toAddressAny addr' == addr
-        ]
+  numUTxOsAt addr cst =
+    Data.Foldable.length
+      [ ()
+      | TxOut (AddressInEra _ addr') _ _ _ <- Map.elems . unUTxO $ utxo cst
+      , toAddressAny addr' == addr
+      ]
 
 prop_observeEscrow :: Property
 prop_observeEscrow = forAllDL observeUTxOEscrow prop_Escrow
@@ -453,10 +455,11 @@ tests ref =
         $ do
           act $ Pay 1 20
           E.awaitSlot 100
-          act $ Refund 1 ,
-    -- testProperty "coverage" (QC.isSuccess (liftIO (snd <$> checkPropEscrowWithCoverage'))),
-    testCase "coverage" printCoverage,
-    testProperty "QuickCheck ContractModel" $  QC.withMaxSuccess 20 (prop_EscrowCoverage ref)
+          act $ Refund 1
+    , -- testProperty "coverage" (QC.isSuccess (liftIO (snd <$> checkPropEscrowWithCoverage'))),
+      testCase "coverage" printCoverage
+    , testProperty "QuickCheck ContractModel" $ QC.withMaxSuccess 40 (prop_EscrowCoverage ref)
+    -- , testProperty "QuickCheck ContractModel" $ QC.withMaxSuccess 40 (prop_Escrow)
     {-
     , testProperty "QuickCheck NoLockedFunds" prop_NoLockedFunds
     , testProperty "QuickCheck validityChecks" $ QC.withMaxSuccess 30 prop_validityChecks
@@ -468,7 +471,8 @@ tests ref =
 printCoverage :: IO ()
 printCoverage = do
   cr <- checkPropEscrowWithCoverage'
-  print $ Pretty.pretty cr
+  -- print $ Pretty.pretty cr
+  pure ()
 
 escrowParams :: POSIXTime -> EscrowParams d
 escrowParams startTime =
@@ -480,9 +484,8 @@ escrowParams startTime =
         ]
     }
 
-
 checkPropEscrowWithCoverage' :: IO PlutusTx.Coverage.CoverageReport
-checkPropEscrowWithCoverage' = E.quickCheckWithCoverage QC.stdArgs options $ QC.withMaxSuccess 20 . E.propRunActionsWithOptions
+checkPropEscrowWithCoverage' = E.quickCheckWithCoverage QC.stdArgs options $ QC.withMaxSuccess 40 . E.propRunActionsWithOptions
 
 checkPropEscrowWithCoverage :: IO ()
 checkPropEscrowWithCoverage = do
@@ -490,22 +493,20 @@ checkPropEscrowWithCoverage = do
     E.quickCheckWithCoverage QC.stdArgs options $ QC.withMaxSuccess 100 . E.propRunActionsWithOptions
   writeCoverageReport "Escrow" cr
 
-
 unitTest1 :: DL EscrowModel ()
 unitTest1 = do
-              val <- QCD.forAllQ $ QCD.chooseQ (10, 20)
-              action $ Pay w1 val
-              action $ Pay w2 val
-              action $ Pay w3 val
-              action $ Redeem w4
-
+  val <- QCD.forAllQ $ QCD.chooseQ (10, 20)
+  action $ Pay w1 val
+  action $ Pay w2 val
+  action $ Pay w3 val
+  action $ Redeem w4
 
 unitTest2 :: DL EscrowModel ()
 unitTest2 = do
-              val <- QCD.forAllQ $ QCD.chooseQ (10, 20)
-              action $ Pay w1 val
-              waitUntilDL 100
-              action $ Refund w1
+  val <- QCD.forAllQ $ QCD.chooseQ (10, 20)
+  action $ Pay w1 val
+  waitUntilDL 100
+  action $ Refund w1
 
 {-
 -- | Certification.
