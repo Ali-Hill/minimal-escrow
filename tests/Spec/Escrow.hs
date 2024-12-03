@@ -457,8 +457,8 @@ tests ref =
           E.awaitSlot 100
           act $ Refund 1
     , -- testProperty "coverage" (QC.isSuccess (liftIO (snd <$> checkPropEscrowWithCoverage'))),
-      testCase "coverage" printCoverage
-    , testProperty "QuickCheck ContractModel" $ QC.withMaxSuccess 40 (prop_EscrowCoverage ref)
+    -- testCase "coverage" printCoverage
+    testProperty "QuickCheck ContractModel" $ QC.withMaxSuccess 40 (prop_EscrowCoverage ref)
     -- , testProperty "QuickCheck ContractModel" $ QC.withMaxSuccess 40 (prop_Escrow)
     {-
     , testProperty "QuickCheck NoLockedFunds" prop_NoLockedFunds
