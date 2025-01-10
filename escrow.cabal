@@ -32,6 +32,23 @@ common lang
     -fno-ignore-interface-pragmas -fno-omit-interface-pragmas
     -fplugin-opt PlutusTx.Plugin:target-version=1.0.0
 
+library test-lib
+  import:             lang
+  exposed-modules:
+    Cardano.PTT.Test.Tasty
+  hs-source-dirs:     test-lib
+  build-depends:
+      base
+    , tasty
+    , tasty-quickcheck
+    , tasty-hunit
+    , plutus-tx
+    , cardano-node-emulator
+    , prettyprinter
+    , mtl
+
+
+
 library
   import:             lang
   exposed-modules:
@@ -104,18 +121,19 @@ test-suite escrow-test
   import:             lang
   type:               exitcode-stdio-1.0
   main-is:            Spec.hs
-  hs-source-dirs:   src
-                    tests
+  hs-source-dirs:   tests
   default-language: Haskell2010
   ghc-options:      -Wno-unused-packages
   other-modules:
     Spec.Escrow
+    Spec.Escrow2
 
   --------------------
   -- Local components
   --------------------
   build-depends:
     cardano-node-emulator    >=1.3.0
+    , escrow
     , plutus-ledger          >=1.3.0
     , plutus-script-utils    >=1.3.0
     , plutus-contract-certification-node
@@ -152,3 +170,4 @@ test-suite escrow-test
     , text
     , flat
     , prettyprinter
+    , test-lib
