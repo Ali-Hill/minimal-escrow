@@ -6,22 +6,34 @@
 module Cardano.PTT.Test.Tasty where
 
 import Cardano.Node.Emulator qualified as E
-import Control.Exception
-import Control.Monad.Reader.Class
+import Control.Arrow ((&&&))
+import Control.Exception (
+  Exception,
+  catch,
+  throwIO,
+ )
+import Control.Monad.Reader.Class (MonadReader, asks)
 import Data.IORef (IORef, newIORef, readIORef)
-import PlutusTx.Coverage
+import PlutusTx.Coverage (
+  CoverageData,
+  CoverageReport (CoverageReport),
+ )
 import Prettyprinter qualified as Pretty
 import Test.Tasty (TestTree)
 import Test.Tasty qualified as Tasty
 import Test.Tasty.HUnit qualified as Tasty
+import Test.Tasty.Options qualified as Tasty
 import Test.Tasty.QuickCheck qualified as Tasty
 
 import Cardano.Node.Emulator.API (
   EmulatorLogs,
   EmulatorM,
  )
+import Cardano.PTT.Test.Options (TestCoverage (TestCoverage))
 import Control.Monad.Reader (Reader, runReader)
-import System.Exit
+import Data.Data (Proxy (Proxy))
+import System.Environment (getArgs)
+import System.Exit (ExitCode (ExitSuccess))
 
 -- define HasCovDataRef
 class HasCovDataRef env where
@@ -62,7 +74,6 @@ instance HasOptions model (Env model) where
   getOptions = envOptions
 
 -- bind functions to the Tasty wrapper
-
 testGroup :: (Monad f) => Tasty.TestName -> [f TestTree] -> f TestTree
 testGroup name xs = do
   Tasty.testGroup name <$> sequence xs
@@ -73,18 +84,29 @@ testCase name prop = do
 
 type EmulatorPredicate = EmulatorLogs -> EmulatorM (Maybe String)
 
+askCoverageOptionsM ::
+  (PTTMonad env model m) =>
+  m (E.Options model -> TestTree) ->
+  m TestTree
+askCoverageOptionsM m = do
+  f <- m
+  (withCov, withoutCov) <- asks $ getOptionsWithCoverage &&& getOptionsWithoutCoverage
+  pure $ Tasty.askOption $ \(TestCoverage enabled) -> f (if enabled then withCov else withoutCov)
+
+askCoverageOptions ::
+  (PTTMonad env model m) =>
+  (E.Options model -> TestTree) ->
+  m TestTree
+askCoverageOptions f = askCoverageOptionsM $ pure f
+
 checkPredicateOptions ::
   (PTTMonad env model m) =>
   Tasty.TestName ->
   EmulatorPredicate ->
   EmulatorM a ->
   m TestTree
-checkPredicateOptions testName predicate em = do
-  E.checkPredicateOptions
-    <$> asks getOptionsWithCoverage
-    <*> pure testName
-    <*> pure predicate
-    <*> pure em
+checkPredicateOptions testName predicate em = askCoverageOptions $
+  \options -> E.checkPredicateOptions options testName predicate em
 
 checkPredicateOptionsWithoutCoverage ::
   (PTTMonad env model m) =>
@@ -105,8 +127,9 @@ testPropertyWithOptions ::
   Tasty.TestName ->
   (E.Options model -> a) ->
   m TestTree
-testPropertyWithOptions testName prop = do
-  Tasty.testProperty testName <$> asks (prop . getOptionsWithCoverage)
+testPropertyWithOptions testName prop =
+  askCoverageOptions $
+    Tasty.testProperty testName . prop
 
 testPropertyWithOptionsWithoutCoverage ::
   forall a env model m.
@@ -132,21 +155,36 @@ testProperty testName prop =
 defaultMain :: E.Options model -> PTTWrapper Env model TestTree -> IO ()
 defaultMain opts tests = defaultMainWith opts tests id
 
+coverageArguments :: IO Bool
+coverageArguments = do
+  args <- getArgs
+  let shouldPrintCoverage = any (`elem` args) ["--test-coverage", "-c"]
+      -- Skip coverage if help was requested
+      skipPrinting = any (`elem` args) ["--help", "-h", "-l", "--list-tests", "-q", "--quiet"]
+  pure $ shouldPrintCoverage && not skipPrinting
+
 defaultMainWith ::
   E.Options model ->
   PTTWrapper Env model TestTree ->
   (Tasty.TestTree -> Tasty.TestTree) ->
   IO ()
 defaultMainWith opts testsWrapper f = do
+  shouldPrintCoverage <- coverageArguments
   (tests, env) <- initTests
-  Tasty.defaultMain
+  Tasty.defaultMainWithIngredients
+    (Tasty.includingOptions [Tasty.Option (Proxy @TestCoverage)] : Tasty.defaultIngredients)
     (f tests)
-    `catch` printCoverage @ExitCode env
+    `catch` ( \(e :: ExitCode) -> do
+                -- print coverage report
+                if e == ExitSuccess && shouldPrintCoverage
+                  then printCoverage env e
+                  else throwIO e
+            )
  where
   initTests = do
     ref <- newIORef mempty
     let env = Env ref opts
-    pure $ (runReader testsWrapper env, env)
+    pure (runReader testsWrapper env, env)
 
 printCoverage ::
   (Exception e, HasCovDataRef env, HasOptions model env) =>

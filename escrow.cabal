@@ -36,6 +36,7 @@ library test-lib
   import:             lang
   exposed-modules:
     Cardano.PTT.Test.Tasty
+    Cardano.PTT.Test.Options
   hs-source-dirs:     test-lib
   build-depends:
       base
